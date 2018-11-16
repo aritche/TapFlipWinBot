@@ -25,9 +25,37 @@ rawCapture = PiRGBArray(camera, size=(160,120))
 time.sleep(0.1)
 
 # OPENCV VARIABLES
-INIT_PERIOD = 100
+INIT_PERIOD = 300
 
-def shouldFlip(curr, frameNum):
+
+"""
+    connectedComps: output after running image through connected comps.
+    color:          color to label found objects
+    thresh:         threshold size (larger = obstacle, smaller = player)
+"""
+def findObjects(connectedComps, color, thresh):
+    obstacles = []
+    player = []
+
+    numObjects = len(connectedComps[2])
+    for ob in range(1,numObjects):
+        cent = connectedComps[3][ob] # centroid of object
+        stat = connectedComps[2][ob] # stats for object
+        if stat[cv2.CC_STAT_AREA] > 0:
+            if stat[cv2.CC_STAT_AREA] > thresh: # Assume obstacle
+                obstacles.append([(int(cent[0]), int(cent[1])),color])
+            else: # Assume player
+                # Final found player object is assumed to be the actual player
+                # All others are assumed to be noise
+                centre = (int(cent[0]), int(cent[1]))
+                if (len(player) == 0):
+                    player.append([centre, color])
+                else:
+                    player[0] = [centre, color]
+
+    return player, obstacles
+
+def shouldFlip(curr, frameNum, vis=False):
     player = [] # stores centroids of player sides (and colour)
     obstacles = [] # stores centroids of obstacles (and colour)
 
@@ -44,71 +72,61 @@ def shouldFlip(curr, frameNum):
     lower_green = np.array([21,100,145])
     upper_green = np.array([85,255,255])
 
-    # Eliminate all non-blue 
+    # Eliminate all non-specified color
     blue = cv2.inRange(hsv, lower_blue, upper_blue)
-    #blue = cv2.bitwise_and(hsv,hsv,mask=mask)
-    #blue = blue[:,:,2]
-    #blue[blue > 0] = 255
+    green = cv2.inRange(hsv, lower_green, upper_green)
 
-    if frameNum < INIT_PERIOD:
-        withBox = curr.copy()
-    #withBox[withBox != 0] = 0
+    # Reduce size and find blue players and obstacles
     blue = cv2.resize(blue, (0,0), fx=0.15, fy=0.15)
     c = cv2.connectedComponentsWithStats(blue, 4, cv2.CV_32S)
-    for ob in range(1,len(c[2])):
-        cent = c[3][ob]
-        stat = c[2][ob]
-        if stat[cv2.CC_STAT_AREA] > 0:
-            # Determine boundaries of component
-            (x1,y1) = stat[cv2.CC_STAT_LEFT], stat[cv2.CC_STAT_TOP]
-            (x2,y2) = x1+stat[cv2.CC_STAT_WIDTH], y1+stat[cv2.CC_STAT_HEIGHT]
-            #withBox = cv2.rectangle(withBox, (x1,y1), (x2,y2), colors[0], 2)
-            if stat[cv2.CC_STAT_AREA] > 4:
-                # Assume obstacle
-                #withBox = cv2.putText(withBox, "Blue Obstacle", (x1,y1-5), cv2.FONT_HERSHEY_PLAIN, 1.0, (255,255,255), 1);
-                #withBox = cv2.rectangle(withBox, (int(x1/0.15),int(y1/0.15)), (int(x2/0.15),int(y2/0.15)), colors[0], 2)
-                obstacles.append([(int(cent[0]), int(cent[1])),COLOR_BLUE])
-            else:
-                # Assmume player
-                #withBox = cv2.putText(withBox, "Blue Player", (x1,y1-5), cv2.FONT_HERSHEY_PLAIN, 1.0, (255,255,255), 1);
-                #withBox = cv2.circle(withBox, (int(cent[0]),int(cent[1])), 3, colors[0], 1)
-                #withBox = cv2.rectangle(withBox, (x1,y1), (x2,y2), colors[0], 2)
-                if frameNum < INIT_PERIOD:
-                    withBox = cv2.rectangle(withBox, (int(x1/0.15),int(y1/0.15)), (int(x2/0.15),int(y2/0.15)), colors[0], 2)
-                if (len(player) == 0):
-                    player.append([(int(cent[0]),int(cent[1])), COLOR_BLUE])
-                else:
-                    player[0] = [(int(cent[0]),int(cent[1])), COLOR_BLUE]
+    bluePlayer, blueObstacles = findObjects(c,COLOR_BLUE,4)
 
-    green = cv2.inRange(hsv, lower_green, upper_green)
-    #cv2.imshow('mask',mask)
-    #cv2.waitKey(1)
-    #green = cv2.bitwise_and(hsv,hsv,mask=mask)
-    #green = green[:,:,2]
-    #green[green > 0] = 255
-
+    # Reduce size and find green players and obstacles
     green = cv2.resize(green, (0,0), fx=0.15, fy=0.15)
     c = cv2.connectedComponentsWithStats(green, 4, cv2.CV_32S)
-    for ob in range(1,len(c[2])):
-        cent = c[3][ob]
-        stat = c[2][ob]
-        if stat[cv2.CC_STAT_AREA] > 0:
-            (x1,y1) = stat[cv2.CC_STAT_LEFT], stat[cv2.CC_STAT_TOP]
-            (x2,y2) = x1+stat[cv2.CC_STAT_WIDTH], y1+stat[cv2.CC_STAT_HEIGHT]
-            if stat[cv2.CC_STAT_AREA] > 4:
-                #withBox = cv2.rectangle(withBox, (int(x1/0.15),int(y1/0.15)), (int(x2/0.15),int(y2/0.15)), colors[1], 2)
-                #withBox = cv2.putText(withBox, "Green Obstacle", (x1,y1-5), cv2.FONT_HERSHEY_PLAIN, 1.0, (255,255,255), 1);
-                obstacles.append([(int(cent[0]), int(cent[1])),COLOR_GREEN])
+    greenPlayer, greenObstacles = findObjects(c,COLOR_GREEN,4)
+
+    # Merge players and obstacles
+    """
+    Check that player sides are at a relatively
+    similar y-level (assuming phone is landscape
+    from camera perspective)
+    """
+    disposePlayers = False
+    if (len(bluePlayer) != 0 and len(greenPlayer) != 0):
+        blueY = bluePlayer[0][0][1]
+        greenY = greenPlayer[0][0][1]
+        if abs(blueY - greenY) > 1:
+            disposePlayers = True
+
+    if (not disposePlayers):
+        player = bluePlayer
+        player = player + [p for p in greenPlayer]
+
+        obstacles = blueObstacles
+        obstacles = obstacles + [o for o in greenObstacles]
+    else:
+        player = []
+        obstacles = []
+
+    if (vis):
+        im = curr.copy()
+        for item in player:
+            col = (0,0,0)
+            if item[-1] == COLOR_GREEN:
+                col = (0,255,0)
             else:
-                if frameNum < INIT_PERIOD:
-                    withBox = cv2.rectangle(withBox, (int(x1/0.15),int(y1/0.15)), (int(x2/0.15),int(y2/0.15)), colors[1], 2)
-                #withBox = cv2.putText(withBox, "Green Player", (x1,y1-5), cv2.FONT_HERSHEY_PLAIN, 1.0, (255,255,255), 1);
-                #withBox = cv2.circle(withBox, (int(cent[0]),int(cent[1])), 3, colors[1], 1)
-                #withBox = cv2.rectangle(withBox, (x1,y1), (x2,y2), colors[1], 2)
-                if (len(player) < 2):
-                    player.append([(int(cent[0]),int(cent[1])),COLOR_GREEN])
-                else:
-                    player[1] = [(int(cent[0]),int(cent[1])),COLOR_GREEN]
+                col = (255,0,0)
+            im = cv2.circle(im, (int(item[0][0]/0.15), int(item[0][1]/0.15)), 3, col)
+        for item in obstacles:
+            col = (0,0,0)
+            if item[-1] == COLOR_GREEN:
+                col = (0,255,0)
+            else:
+                col = (255,0,0)
+            #im = cv2.circle(im, (int(item[0][0]/0.15), int(item[0][1]/0.15)), 6, col)
+        cv2.imshow('Disp', im)
+        cv2.waitKey(1)
 
     flip = False 
     if len(player) == 0:
@@ -136,17 +154,9 @@ def shouldFlip(curr, frameNum):
         #print("Too many player sides detected...")
         dummy = True
 
-    if frameNum < INIT_PERIOD:
-        cv2.imshow('With Box', withBox)
-        cv2.waitKey(1)
-
-    #cv2.imshow('Blue', blue)
-    #cv2.waitKey(1)
-
-    #cv2.imshow('Green', green)
-    #cv2.waitKey(1)
     return flip
 
+# Find the phone's screen in the large area seen by the camera
 def findScreen(im):
     # Apply edge detection, dilate result
     kernel = np.ones((2,2), np.uint16)
@@ -171,56 +181,15 @@ def findScreen(im):
     #return pos
     return [(0+int(160*0.3),0+int(120*0.15)), (160-int(width*0.5),120-int(120*0.15))]
 
+# Send a flip action request to the arduino
 def flip():
-    #ser.write(b'f')
     ser.write(b'f')
     print('flip')
     return 0
 
-def findPlayer(curr):
-    gray = cv2.cvtColor(curr, cv2.COLOR_BGR2GRAY)
-    gray[gray > 170] = 0
-    gray[gray < 100] = 0
-    gray[gray > 0] = 255
-
-    kernel = np.ones((3,3), np.uint8)
-    mask = cv2.morphologyEx(gray, cv2.MORPH_OPEN, kernel)
-
-    #result = cv2.bitwise_and(curr,curr,mask=mask)
-
-    mask = cv2.resize(mask, (0,0), fx=0.10, fy=0.10)
-    c = cv2.connectedComponentsWithStats(mask, 4, cv2.CV_32S)
-    withBox = curr.copy()
-    for ob in range(1,len(c[2])):
-        cent = c[3][ob]
-        stat = c[2][ob]
-        if stat[cv2.CC_STAT_AREA] > 0:
-            # Determine boundaries of component
-            (x1,y1) = stat[cv2.CC_STAT_LEFT], stat[cv2.CC_STAT_TOP]
-            (x2,y2) = x1+stat[cv2.CC_STAT_WIDTH], y1+stat[cv2.CC_STAT_HEIGHT]
-            if stat[cv2.CC_STAT_AREA] > 50:
-                withBox = cv2.rectangle(withBox, (x1,y1), (x2,y2), (255,0,0), 2)
-                # Assume obstacle
-                #withBox = cv2.putText(withBox, "Blue Obstacle", (x1,y1-5), cv2.FONT_HERSHEY_PLAIN, 1.0, (255,255,255), 1);
-                #withBox = cv2.rectangle(withBox, (x1,y1), (x2,y2), colors[0], 2)
-                #obstacles.append([(int(cent[0]), int(cent[1])),COLOR_BLUE])
-            #else:
-                # Assmume player
-                #withBox = cv2.putText(withBox, "Blue Player", (x1,y1-5), cv2.FONT_HERSHEY_PLAIN, 1.0, (255,255,255), 1);
-                #withBox = cv2.circle(withBox, (int(cent[0]),int(cent[1])), 3, colors[0], 1)
-                #withBox = cv2.rectangle(withBox, (x1,y1), (x2,y2), colors[0], 2)
-                #if (len(player) == 0):
-                #    player.append([(int(cent[0]),int(cent[1])), COLOR_BLUE])
-                #else:
-                #    player[0] = [(int(cent[0]),int(cent[1])), COLOR_BLUE]
-
-    #cv2.imshow('prev', withBox)
-    #cv2.waitKey(1)
-    
-
 def main():
     # Create window
-    cv2.namedWindow('window', cv2.WINDOW_NORMAL)
+    #cv2.namedWindow('window', cv2.WINDOW_NORMAL)
 
     # FPS counting parameters
     interval = 1
@@ -243,19 +212,24 @@ def main():
             curr = frame.array
             screen = findScreen(curr)
 
+        # Update the current estimated best action
         prevEst = currEst
 
         # Init frame
         rawCapture.truncate()
         rawCapture.seek(0)
 
-        # Update curr and prev
+        # Update curr and prev frames
         prev = curr
         curr = frame.array
         curr = curr[screen[0][1]:screen[1][1],screen[0][0]:screen[1][0]]
-        #curr = cv2.resize(curr, (0,0), fx=0.10, fy=0.10)
 
+        # Get the next action
         flipHist.append(shouldFlip(curr, frameNum))
+        
+        # Get the majority vote over the past 3 suggested actions
+        # Only execute the action if the action has changed from the
+        #   previously suggested action
         if (len(flipHist) > 3):
             flipHist.pop(0)
             currEst = max(set(flipHist), key = flipHist.count)
@@ -263,11 +237,8 @@ def main():
                 if (currEst == True):
                     flip()
 
-        if (frameNum < INIT_PERIOD):
-            cv2.imshow('window', curr)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-
+        # Count the frames being seen per second
+        # Useful for debugging/optimisation benchmarking
         intervalCounter += 1
         if (time.time() - startTime) > interval:
             print(int(intervalCounter / (time.time() - startTime)))
