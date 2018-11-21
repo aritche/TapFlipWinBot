@@ -65,11 +65,11 @@ def shouldFlip(curr, frameNum, vis=False):
     colors = [(255,0,0), (0,255,0)]
 
     # Create HSV ranges for blue
-    lower_blue = np.array([85,100,135])
+    lower_blue = np.array([85,70,120])
     upper_blue = np.array([120,255,255])
 
     # Create HSV ranges for green
-    lower_green = np.array([21,100,145])
+    lower_green = np.array([21,70,120])
     upper_green = np.array([85,255,255])
 
     # Eliminate all non-specified color
@@ -124,7 +124,7 @@ def shouldFlip(curr, frameNum, vis=False):
                 col = (0,255,0)
             else:
                 col = (255,0,0)
-            #im = cv2.circle(im, (int(item[0][0]/0.15), int(item[0][1]/0.15)), 6, col)
+            im = cv2.circle(im, (int(item[0][0]/0.15), int(item[0][1]/0.15)), 6, col)
         cv2.imshow('Disp', im)
         cv2.waitKey(1)
 
